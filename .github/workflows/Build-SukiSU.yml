@@ -219,7 +219,9 @@ jobs:
           cd kernel_workspace/kernel_platform/common
           cp ../../SukiSU_patch/69_hide_stuff.patch ./
           echo "正在打隐藏应用补丁"
-          patch -p1 -F 3 < 69_hide_stuff.patch
+          patch -p1 -F 3 < 69_hide_stuff.patch || true
+          echo "正在修复未初始化变量错误..."
+          sed -i 's/struct dentry \*dentry;/struct dentry \*dentry = NULL;/g' fs/proc/task_mmu.c
 
       - name: Apply LZ4KD
         run: |
