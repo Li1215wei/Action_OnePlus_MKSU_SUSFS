@@ -1,4 +1,4 @@
-name: Build OnePlus_SukiSU Ultra Final (with SSG + Debug)
+name: Build OnePlus_SukiSU Ultra Final (with SSG)
 on:
   workflow_dispatch:
     inputs:
@@ -232,56 +232,48 @@ jobs:
           fi
 
       # ================================================================
-      # 🔍 SSG IO 调度器 – 调试版本（允许失败，逐步骤输出）
+      # SSG IO 调度器 – 同时修改 msm-kernel/block 和 common/block
       # ================================================================
-      - name: Add SSG IO Scheduler (DEBUG)
+      - name: Add SSG IO Scheduler
         id: ssg
         continue-on-error: true
         run: |
-          set -x  # 打印每条命令
-          echo "=== [SSG] Step 1: 进入 kernel_platform ==="
-          cd kernel_workspace/kernel_platform
-          pwd
-          ls -la
+          set -x
 
-          echo "=== [SSG] Step 2: 克隆 SSG 仓库 ==="
+          echo "=== [SSG] 克隆仓库 ==="
           git clone --depth 1 --filter=blob:none --sparse \
-            https://github.com/ramabondanp/android_kernel_common-5.10.git ../ssg_src || {
-            echo "❌ 克隆失败，跳过 SSG"
-            exit 1
-          }
-
-          echo "=== [SSG] Step 3: 设置 sparse-checkout ==="
+            https://github.com/ramabondanp/android_kernel_common-5.10.git ../ssg_src || exit 1
           cd ../ssg_src
-          git sparse-checkout set block || {
-            echo "❌ sparse-checkout 失败"
-            exit 1
-          }
+          git sparse-checkout set block
 
-          echo "=== [SSG] Step 4: 检查 block/ 目录 ==="
-          ls -la block/ || {
-            echo "❌ block/ 目录不存在"
-            exit 1
-          }
-
-          echo "=== [SSG] Step 5: 创建目标目录 ==="
+          # 复制到 msm-kernel/block
+          echo "=== [SSG] 复制到 msm-kernel/block ==="
           mkdir -p ../kernel_workspace/kernel_platform/msm-kernel/block
+          cp block/ssg-iosched.c ../kernel_workspace/kernel_platform/msm-kernel/block/
+          cp block/ssg-cgroup.c ../kernel_workspace/kernel_platform/msm-kernel/block/ 2>/dev/null || true
 
-          echo "=== [SSG] Step 6: 复制 ssg-iosched.c ==="
-          cp block/ssg-iosched.c ../kernel_workspace/kernel_platform/msm-kernel/block/ || {
-            echo "❌ 复制 ssg-iosched.c 失败"
-            exit 1
-          }
+          # 复制到 common/block
+          echo "=== [SSG] 复制到 common/block ==="
+          mkdir -p ../kernel_workspace/kernel_platform/common/block
+          cp block/ssg-iosched.c ../kernel_workspace/kernel_platform/common/block/
+          cp block/ssg-cgroup.c ../kernel_workspace/kernel_platform/common/block/ 2>/dev/null || true
 
-          echo "=== [SSG] Step 7: 复制 ssg-cgroup.c（可选） ==="
-          cp block/ssg-cgroup.c ../kernel_workspace/kernel_platform/msm-kernel/block/ 2>/dev/null || echo "⚠️ ssg-cgroup.c 不存在，跳过"
-
-          echo "=== [SSG] Step 8: 修改 Makefile ==="
+          # 修改 msm-kernel/block
+          echo "=== [SSG] 修改 msm-kernel/block Makefile & Kconfig ==="
           cd ../kernel_workspace/kernel_platform/msm-kernel/block
-          sed -i '/obj-$(CONFIG_IOSCHED_BFQ) += bfq.o/a ssg-$(CONFIG_MQ_IOSCHED_SSG) := ssg-iosched.o\nssg-$(CONFIG_MQ_IOSCHED_SSG_CGROUP) += ssg-cgroup.o\nobj-$(CONFIG_MQ_IOSCHED_SSG) += ssg.o' Makefile || echo "⚠️ Makefile 修改失败"
+          sed -i '/obj-$(CONFIG_IOSCHED_BFQ) += bfq.o/a ssg-$(CONFIG_MQ_IOSCHED_SSG) := ssg-iosched.o\nssg-$(CONFIG_MQ_IOSCHED_SSG_CGROUP) += ssg-cgroup.o\nobj-$(CONFIG_MQ_IOSCHED_SSG) += ssg.o' Makefile || echo "msm Makefile 修改失败"
+          sed -i '/config BFQ_CGROUP_DEBUG/a config MQ_IOSCHED_SSG\n\ttristate "SamSung Generic I/O scheduler"\n\tdefault n\n\thelp\n\t  SamSung Generic IO scheduler.\n\nconfig MQ_IOSCHED_SSG_CGROUP\n\ttristate "Control Group for SamSung Generic I/O scheduler"\n\tdefault n\n\tdepends on BLK_CGROUP\n\tdepends on MQ_IOSCHED_SSG\n\thelp\n\t  Control Group for SamSung Generic IO scheduler.\n' Kconfig || echo "msm Kconfig 修改失败"
 
-          echo "=== [SSG] Step 9: 修改 Kconfig ==="
-          sed -i '/config BFQ_CGROUP_DEBUG/a config MQ_IOSCHED_SSG\n\ttristate "SamSung Generic I/O scheduler"\n\tdefault n\n\thelp\n\t  SamSung Generic IO scheduler.\n\nconfig MQ_IOSCHED_SSG_CGROUP\n\ttristate "Control Group for SamSung Generic I/O scheduler"\n\tdefault n\n\tdepends on BLK_CGROUP\n\tdepends on MQ_IOSCHED_SSG\n\thelp\n\t  Control Group for SamSung Generic IO scheduler.\n' Kconfig || echo "⚠️ Kconfig 修改失败"
+          # 修改 common/block
+          echo "=== [SSG] 修改 common/block Makefile & Kconfig ==="
+          cd ../kernel_workspace/kernel_platform/common/block
+          sed -i '/obj-$(CONFIG_IOSCHED_BFQ) += bfq.o/a ssg-$(CONFIG_MQ_IOSCHED_SSG) := ssg-iosched.o\nssg-$(CONFIG_MQ_IOSCHED_SSG_CGROUP) += ssg-cgroup.o\nobj-$(CONFIG_MQ_IOSCHED_SSG) += ssg.o' Makefile || echo "common Makefile 修改失败"
+          sed -i '/config BFQ_CGROUP_DEBUG/a config MQ_IOSCHED_SSG\n\ttristate "SamSung Generic I/O scheduler"\n\tdefault n\n\thelp\n\t  SamSung Generic IO scheduler.\n\nconfig MQ_IOSCHED_SSG_CGROUP\n\ttristate "Control Group for SamSung Generic I/O scheduler"\n\tdefault n\n\tdepends on BLK_CGROUP\n\tdepends on MQ_IOSCHED_SSG\n\thelp\n\t  Control Group for SamSung Generic IO scheduler.\n' Kconfig || echo "common Kconfig 修改失败"
+
+          # 验证
+          echo "=== [SSG] 验证文件存在 ==="
+          ls -la ../kernel_workspace/kernel_platform/msm-kernel/block/ | grep -i ssg || echo "msm-kernel: ssg 文件不存在"
+          ls -la ../kernel_workspace/kernel_platform/common/block/ | grep -i ssg || echo "common: ssg 文件不存在"
 
           echo "=== ✅ SSG 步骤全部完成 ==="
           echo "SSG_OK=true" >> $GITHUB_ENV
@@ -324,14 +316,10 @@ jobs:
           echo "CONFIG_HAVE_KVM=y" >> "$CONFIG_FILE"
           echo "CONFIG_KVM_ARM_HOST=y" >> "$CONFIG_FILE"
 
-          # SSG IO 调度器配置（如果 SSG 步骤成功则启用，否则跳过）
-          if [ "${{ env.SSG_OK }}" = "true" ]; then
-            echo "CONFIG_MQ_IOSCHED_SSG=y" >> "$CONFIG_FILE"
-            echo "CONFIG_MQ_IOSCHED_SSG_CGROUP=y" >> "$CONFIG_FILE"
-            echo "CONFIG_MQ_SSG_DEFAULT=y" >> "$CONFIG_FILE"
-          else
-            echo "⚠️ SSG 未成功，跳过 SSG 配置"
-          fi
+          # SSG IO 调度器配置（无条件启用，如果源码未复制成功编译会报错）
+          echo "CONFIG_MQ_IOSCHED_SSG=y" >> "$CONFIG_FILE"
+          echo "CONFIG_MQ_IOSCHED_SSG_CGROUP=y" >> "$CONFIG_FILE"
+          echo "CONFIG_MQ_SSG_DEFAULT=y" >> "$CONFIG_FILE"
 
           # 网络优化
           echo "CONFIG_TCP_CONG_BBR=y" >> "$CONFIG_FILE"
