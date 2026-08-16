@@ -1,0 +1,60 @@
+name: Analyze Wild Kernel Image
+on:
+  workflow_dispatch:
+    inputs:
+      IMAGE_URL:
+        description: '大佬Image文件的直链下载地址'
+        required: true
+        default: 'https://github.com/yourname/yourrepo/releases/download/tag/Image'
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: Install tools
+        run: |
+          sudo apt update
+          sudo apt install -y binutils curl
+
+      - name: Download wild Image
+        run: |
+          curl -L "${{ github.event.inputs.IMAGE_URL }}" -o /tmp/wild_Image
+          file /tmp/wild_Image
+          ls -lh /tmp/wild_Image
+
+      - name: Extract uclamp symbols
+        run: |
+          {
+            echo "=== uclamp symbols from nm ==="
+            nm /tmp/wild_Image 2>/dev/null | grep -i uclamp || echo "No uclamp symbols found by nm"
+            echo ""
+            echo "=== uclamp strings ==="
+            strings /tmp/wild_Image | grep -i uclamp || echo "No uclamp strings"
+            echo ""
+            echo "=== sched related strings (head 50) ==="
+            strings /tmp/wild_Image | grep -i "sched" | head -50
+            echo ""
+            echo "=== SSG related strings ==="
+            strings /tmp/wild_Image | grep -i "ssg" || echo "No SSG strings"
+            echo ""
+            echo "=== bbr related strings ==="
+            strings /tmp/wild_Image | grep -i "bbr" || echo "No bbr strings"
+          } > /tmp/uclamp_report.txt
+
+      - name: Upload analysis result
+        uses: actions/upload-artifact@v4
+        with:
+          name: wild_kernel_analysis
+          path: /tmp/uclamp_report.txt
