@@ -232,15 +232,19 @@ jobs:
           fi
 
       # ================================================================
-      # SSG IO 调度器 – 调用你仓库根目录的 add_ssg.sh 脚本
+      # SSG IO 调度器 – 用 $GITHUB_WORKSPACE 定位脚本
       # ================================================================
       - name: Add SSG IO Scheduler
         id: ssg
         continue-on-error: true
         run: |
-          echo "=== 执行 add_ssg.sh 脚本 ==="
-          chmod +x ./add_ssg.sh
-          ./add_ssg.sh
+          echo "=== 当前工作目录 ==="
+          pwd
+          echo "=== 仓库根目录内容 ==="
+          ls -la $GITHUB_WORKSPACE
+          echo "=== 执行 add_ssg.sh ==="
+          chmod +x $GITHUB_WORKSPACE/add_ssg.sh
+          $GITHUB_WORKSPACE/add_ssg.sh
           echo "SSG_OK=true" >> $GITHUB_ENV
 
       # ================================================================
