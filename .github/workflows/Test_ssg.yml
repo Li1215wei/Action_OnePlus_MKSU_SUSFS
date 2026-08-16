@@ -1,0 +1,120 @@
+name: Test SSG移植 (快速验证)
+on:
+  workflow_dispatch:
+
+jobs:
+  test-ssg:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 最大化存储空间
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: 安装依赖
+        run: |
+          sudo apt update
+          sudo apt install -y git curl python3
+
+      - name: 安装 repo 工具
+        run: |
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          chmod a+x ~/repo
+          sudo mv ~/repo /usr/local/bin/repo
+
+      - name: 拉取内核源码 (仅同步目录结构)
+        run: |
+          mkdir kernel_workspace && cd kernel_workspace
+          repo init -u https://github.com/${{ github.repository }}.git -b main -m oneplus_ace_pro_v.xml --depth=1
+          repo sync
+
+      - name: 执行 SSG 移植脚本
+        run: |
+          cat > /tmp/add_ssg.sh << 'EOFSSG'
+          #!/bin/bash
+          set -e
+          cd kernel_workspace/kernel_platform
+
+          echo "=== 克隆 SSG 仓库 ==="
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/ramabondanp/android_kernel_common-5.10.git ../ssg_src
+          cd ../ssg_src
+          git sparse-checkout set block
+
+          echo "=== 复制 SSG 源码到 msm-kernel/block ==="
+          mkdir -p ../kernel_workspace/kernel_platform/msm-kernel/block
+          cp block/ssg-iosched.c ../kernel_workspace/kernel_platform/msm-kernel/block/
+          cp block/ssg-cgroup.c ../kernel_workspace/kernel_platform/msm-kernel/block/ 2>/dev/null || true
+
+          echo "=== 复制 SSG 源码到 common/block ==="
+          mkdir -p ../kernel_workspace/kernel_platform/common/block
+          cp block/ssg-iosched.c ../kernel_workspace/kernel_platform/common/block/
+          cp block/ssg-cgroup.c ../kernel_workspace/kernel_platform/common/block/ 2>/dev/null || true
+
+          echo "=== 修改 msm-kernel/block/Makefile ==="
+          cd ../kernel_workspace/kernel_platform/msm-kernel/block
+          if ! grep -q "ssg-" Makefile; then
+            echo "" >> Makefile
+            echo "# SSG IO scheduler" >> Makefile
+            echo "ssg-\$(CONFIG_MQ_IOSCHED_SSG) := ssg-iosched.o" >> Makefile
+            echo "ssg-\$(CONFIG_MQ_IOSCHED_SSG_CGROUP) += ssg-cgroup.o" >> Makefile
+            echo "obj-\$(CONFIG_MQ_IOSCHED_SSG) += ssg.o" >> Makefile
+          fi
+
+          echo "=== 修改 msm-kernel/block/Kconfig ==="
+          if ! grep -q "MQ_IOSCHED_SSG" Kconfig; then
+            echo "" >> Kconfig
+            echo "config MQ_IOSCHED_SSG" >> Kconfig
+            echo '  tristate "SamSung Generic I/O scheduler"' >> Kconfig
+            echo "  default n" >> Kconfig
+            echo "  help" >> Kconfig
+            echo "    SamSung Generic IO scheduler." >> Kconfig
+            echo "" >> Kconfig
+            echo "config MQ_IOSCHED_SSG_CGROUP" >> Kconfig
+            echo '  tristate "Control Group for SamSung Generic I/O scheduler"' >> Kconfig
+            echo "  default n" >> Kconfig
+            echo "  depends on BLK_CGROUP" >> Kconfig
+            echo "  depends on MQ_IOSCHED_SSG" >> Kconfig
+            echo "  help" >> Kconfig
+            echo "    Control Group for SamSung Generic IO scheduler." >> Kconfig
+          fi
+
+          echo "=== 修改 common/block/Makefile ==="
+          cd ../kernel_workspace/kernel_platform/common/block
+          if ! grep -q "ssg-" Makefile; then
+            echo "" >> Makefile
+            echo "# SSG IO scheduler" >> Makefile
+            echo "ssg-\$(CONFIG_MQ_IOSCHED_SSG) := ssg-iosched.o" >> Makefile
+            echo "ssg-\$(CONFIG_MQ_IOSCHED_SSG_CGROUP) += ssg-cgroup.o" >> Makefile
+            echo "obj-\$(CONFIG_MQ_IOSCHED_SSG) += ssg.o" >> Makefile
+          fi
+
+          echo "=== 修改 common/block/Kconfig ==="
+          if ! grep -q "MQ_IOSCHED_SSG" Kconfig; then
+            echo "" >> Kconfig
+            echo "config MQ_IOSCHED_SSG" >> Kconfig
+            echo '  tristate "SamSung Generic I/O scheduler"' >> Kconfig
+            echo "  default n" >> Kconfig
+            echo "  help" >> Kconfig
+            echo "    SamSung Generic IO scheduler." >> Kconfig
+            echo "" >> Kconfig
+            echo "config MQ_IOSCHED_SSG_CGROUP" >> Kconfig
+            echo '  tristate "Control Group for SamSung Generic I/O scheduler"' >> Kconfig
+            echo "  default n" >> Kconfig
+            echo "  depends on BLK_CGROUP" >> Kconfig
+            echo "  depends on MQ_IOSCHED_SSG" >> Kconfig
+            echo "  help" >> Kconfig
+            echo "    Control Group for SamSung Generic IO scheduler." >> Kconfig
+          fi
+
+          echo "=== 验证 SSG 文件 ==="
+          echo "--- msm-kernel/block ---"
+          ls -la ../kernel_workspace/kernel_platform/msm-kernel/block/ssg-* 2>/dev/null || echo "❌ 未找到 ssg 文件"
+          echo "--- common/block ---"
+          ls -la ../kernel_workspace/kernel_platform/common/b
