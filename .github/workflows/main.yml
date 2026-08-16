@@ -1,51 +1,108 @@
-- name: Find and export uclamp source files
-  run: |
-    cd kernel_workspace/kernel_platform
+name: Export OKI uclamp source files
+on:
+  workflow_dispatch:
 
-    # 创建输出目录
-    mkdir -p /tmp/uclamp_src
+jobs:
+  export-uclamp:
+    runs-on: ubuntu-latest
 
-    echo "=== Searching for uclamp related source files in msm-kernel ==="
-    # 在 msm-kernel 下搜索所有包含 "uclamp" 的 .c 和 .h 文件
-    find ./msm-kernel -type f \( -name "*.c" -o -name "*.h" \) -exec grep -l "uclamp" {} \; 2>/dev/null > /tmp/uclamp_files_list.txt
+    steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
 
-    # 如果 msm-kernel 没找到，在 common 下搜索
-    if [ ! -s /tmp/uclamp_files_list.txt ]; then
-      echo "No uclamp files found in msm-kernel, searching in common..."
-      find ./common -type f \( -name "*.c" -o -name "*.h" \) -exec grep -l "uclamp" {} \; 2>/dev/null > /tmp/uclamp_files_list.txt
-    fi
+      - name: Configure Git
+        run: |
+          git config --global user.name "Numbersf"
+          git config --global user.email "263623064@qq.com"
 
-    # 显示找到的文件列表
-    echo "=== Files found ==="
-    cat /tmp/uclamp_files_list.txt
-    echo ""
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt upgrade -y
+          sudo apt install -y python3 git curl
 
-    # 复制找到的文件到输出目录
-    while IFS= read -r file; do
-      if [ -f "$file" ]; then
-        target_dir="/tmp/uclamp_src/$(dirname "$file")"
-        mkdir -p "$target_dir"
-        cp "$file" "$target_dir/"
-        echo "Copied: $file"
-      fi
-    done < /tmp/uclamp_files_list.txt
+      - name: Install repo tool
+        run: |
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          chmod a+x ~/repo
+          sudo mv ~/repo /usr/local/bin/repo
 
-    # 如果还是没有找到任何文件，输出诊断信息
-    if [ ! -s /tmp/uclamp_files_list.txt ]; then
-      echo "ERROR: No uclamp source files found in msm-kernel or common!" > /tmp/uclamp_src/NO_UCLAMP_FILES.txt
-      echo "Searching for sched directory structure..." >> /tmp/uclamp_src/NO_UCLAMP_FILES.txt
-      find ./msm-kernel -type d -name sched >> /tmp/uclamp_src/NO_UCLAMP_FILES.txt 2>/dev/null || echo "No sched dir found" >> /tmp/uclamp_src/NO_UCLAMP_FILES.txt
-    fi
+      - name: Initialize repo and sync
+        run: |
+          mkdir kernel_workspace && cd kernel_workspace
+          repo init -u https://github.com/${{ github.repository }}.git -b main -m oneplus_ace_pro_v.xml --depth=1
+          repo sync
+          if [  -e kernel_platform/common/BUILD.bazel ]; then
+          sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' kernel_platform/common/BUILD.bazel
+          fi
+          if [  -e kernel_platform/msm-kernel/BUILD.bazel ]; then
+          sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' kernel_platform/msm-kernel/BUILD.bazel
+          fi
+          rm kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports!"
+          rm kernel_platform/msm-kernel/android/abi_gki_protected_exports_* || echo "No protected exports!"
 
-    # 生成汇总报告
-    {
-      echo "=== UCLAMP SOURCE FILES SUMMARY ==="
-      echo "Total files found: $(wc -l < /tmp/uclamp_files_list.txt 2>/dev/null || echo 0)"
-      echo ""
-      echo "=== File list ==="
-      cat /tmp/uclamp_files_list.txt 2>/dev/null || echo "No files found"
-      echo ""
-      echo "=== Directory structure of extracted files ==="
-      cd /tmp/uclamp_src
-      find . -type f | sort 2>/dev/null || echo "No files extracted"
-    } > /tmp/uclamp_src/SUMMARY.txt
+      - name: Find and export uclamp source files
+        run: |
+          cd kernel_workspace/kernel_platform
+          mkdir -p /tmp/uclamp_src
+
+          # 关闭错误退出，避免因找不到文件而崩溃
+          set +e
+
+          echo "=== Searching for uclamp in msm-kernel ==="
+          find ./msm-kernel -type f \( -name "*.c" -o -name "*.h" \) -exec grep -l "uclamp" {} \; 2>/dev/null > /tmp/uclamp_files_list.txt
+
+          if [ ! -s /tmp/uclamp_files_list.txt ]; then
+            echo "No uclamp files in msm-kernel, searching in common..."
+            find ./common -type f \( -name "*.c" -o -name "*.h" \) -exec grep -l "uclamp" {} \; 2>/dev/null > /tmp/uclamp_files_list.txt
+          fi
+
+          # 如果还是没有，生成一个空列表文件
+          if [ ! -s /tmp/uclamp_files_list.txt ]; then
+            echo "No uclamp files found anywhere." > /tmp/uclamp_files_list.txt
+          fi
+
+          # 显示找到的文件列表
+          echo "=== Files found ==="
+          cat /tmp/uclamp_files_list.txt
+
+          # 复制文件
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              target_dir="/tmp/uclamp_src/$(dirname "$file")"
+              mkdir -p "$target_dir"
+              cp "$file" "$target_dir/"
+              echo "Copied: $file"
+            fi
+          done < /tmp/uclamp_files_list.txt
+
+          # 生成 SUMMARY
+          {
+            echo "=== UCLAMP SOURCE FILES SUMMARY ==="
+            echo "Total files found: $(wc -l < /tmp/uclamp_files_list.txt 2>/dev/null | tr -d ' ')"
+            echo ""
+            echo "=== File list ==="
+            cat /tmp/uclamp_files_list.txt
+            echo ""
+            echo "=== sched directory listing (msm-kernel) ==="
+            ls -la ./msm-kernel/kernel/sched/ 2>/dev/null || echo "sched directory not found in msm-kernel"
+            echo ""
+            echo "=== sched directory listing (common) ==="
+            ls -la ./common/kernel/sched/ 2>/dev/null || echo "sched directory not found in common"
+          } > /tmp/uclamp_src/SUMMARY.txt
+
+          # 恢复错误退出
+          set -e
+
+      - name: Upload uclamp source files
+        uses: actions/upload-artifact@v4
+        with:
+          name: oki_uclamp_sources
+          path: /tmp/uclamp_src/
