@@ -1,4 +1,4 @@
-name: Build OnePlus_SukiSU Ultra Final (with SSG + Optimized Debug)
+name: Build OnePlus_SukiSU Ultra Final (with SSG + Debug)
 on:
   workflow_dispatch:
     inputs:
@@ -169,7 +169,6 @@ jobs:
           rm kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports!"
           rm kernel_platform/msm-kernel/android/abi_gki_protected_exports_* || echo "No protected exports!"
 
-      # 删除 -dirty 后缀
       - name: Force remove -dirty suffix
         run: |
           cd kernel_workspace/kernel_platform
@@ -180,7 +179,6 @@ jobs:
           git add -A
           git commit -m "Force remove -dirty suffix from kernel version"
 
-      # 添加 SukiSU Ultra
       - name: Add KernelSU-SukiSU Ultra
         run: |
           cd kernel_workspace/kernel_platform
@@ -233,37 +231,64 @@ jobs:
             echo '完成LZ4KD补丁'
           fi
 
-      # ============================================================
-      # 新增：拉取 SSG IO 调度器源码（路径修正为 msm-kernel/block）
-      # ============================================================
-      - name: Add SSG IO Scheduler
+      # ================================================================
+      # 🔍 SSG IO 调度器 – 调试版本（允许失败，逐步骤输出）
+      # ================================================================
+      - name: Add SSG IO Scheduler (DEBUG)
+        id: ssg
+        continue-on-error: true
         run: |
+          set -x  # 打印每条命令
+          echo "=== [SSG] Step 1: 进入 kernel_platform ==="
           cd kernel_workspace/kernel_platform
+          pwd
+          ls -la
 
-          # 克隆包含 SSG 的内核仓库（只拉 block 目录）
+          echo "=== [SSG] Step 2: 克隆 SSG 仓库 ==="
           git clone --depth 1 --filter=blob:none --sparse \
-            https://github.com/ramabondanp/android_kernel_common-5.10.git ../ssg_src
+            https://github.com/ramabondanp/android_kernel_common-5.10.git ../ssg_src || {
+            echo "❌ 克隆失败，跳过 SSG"
+            exit 1
+          }
+
+          echo "=== [SSG] Step 3: 设置 sparse-checkout ==="
           cd ../ssg_src
-          git sparse-checkout set block
+          git sparse-checkout set block || {
+            echo "❌ sparse-checkout 失败"
+            exit 1
+          }
 
-          # 复制 SSG 相关源文件到 msm-kernel/block（正确路径）
-          cp block/ssg-iosched.c ../kernel_workspace/kernel_platform/msm-kernel/block/
-          cp block/ssg-cgroup.c ../kernel_workspace/kernel_platform/msm-kernel/block/ 2>/dev/null || true
+          echo "=== [SSG] Step 4: 检查 block/ 目录 ==="
+          ls -la block/ || {
+            echo "❌ block/ 目录不存在"
+            exit 1
+          }
 
+          echo "=== [SSG] Step 5: 创建目标目录 ==="
+          mkdir -p ../kernel_workspace/kernel_platform/msm-kernel/block
+
+          echo "=== [SSG] Step 6: 复制 ssg-iosched.c ==="
+          cp block/ssg-iosched.c ../kernel_workspace/kernel_platform/msm-kernel/block/ || {
+            echo "❌ 复制 ssg-iosched.c 失败"
+            exit 1
+          }
+
+          echo "=== [SSG] Step 7: 复制 ssg-cgroup.c（可选） ==="
+          cp block/ssg-cgroup.c ../kernel_workspace/kernel_platform/msm-kernel/block/ 2>/dev/null || echo "⚠️ ssg-cgroup.c 不存在，跳过"
+
+          echo "=== [SSG] Step 8: 修改 Makefile ==="
           cd ../kernel_workspace/kernel_platform/msm-kernel/block
+          sed -i '/obj-$(CONFIG_IOSCHED_BFQ) += bfq.o/a ssg-$(CONFIG_MQ_IOSCHED_SSG) := ssg-iosched.o\nssg-$(CONFIG_MQ_IOSCHED_SSG_CGROUP) += ssg-cgroup.o\nobj-$(CONFIG_MQ_IOSCHED_SSG) += ssg.o' Makefile || echo "⚠️ Makefile 修改失败"
 
-          # 修改 block/Makefile：在 bfq.o 后面追加 ssg 编译规则
-          sed -i '/obj-$(CONFIG_IOSCHED_BFQ) += bfq.o/a ssg-$(CONFIG_MQ_IOSCHED_SSG) := ssg-iosched.o\nssg-$(CONFIG_MQ_IOSCHED_SSG_CGROUP) += ssg-cgroup.o\nobj-$(CONFIG_MQ_IOSCHED_SSG) += ssg.o' Makefile
+          echo "=== [SSG] Step 9: 修改 Kconfig ==="
+          sed -i '/config BFQ_CGROUP_DEBUG/a config MQ_IOSCHED_SSG\n\ttristate "SamSung Generic I/O scheduler"\n\tdefault n\n\thelp\n\t  SamSung Generic IO scheduler.\n\nconfig MQ_IOSCHED_SSG_CGROUP\n\ttristate "Control Group for SamSung Generic I/O scheduler"\n\tdefault n\n\tdepends on BLK_CGROUP\n\tdepends on MQ_IOSCHED_SSG\n\thelp\n\t  Control Group for SamSung Generic IO scheduler.\n' Kconfig || echo "⚠️ Kconfig 修改失败"
 
-          # 修改 block/Kconfig：在 BFQ_CGROUP_DEBUG 后面追加 SSG 配置项
-          sed -i '/config BFQ_CGROUP_DEBUG/a config MQ_IOSCHED_SSG\n\ttristate "SamSung Generic I/O scheduler"\n\tdefault n\n\thelp\n\t  SamSung Generic IO scheduler.\n\nconfig MQ_IOSCHED_SSG_CGROUP\n\ttristate "Control Group for SamSung Generic I/O scheduler"\n\tdefault n\n\tdepends on BLK_CGROUP\n\tdepends on MQ_IOSCHED_SSG\n\thelp\n\t  Control Group for SamSung Generic IO scheduler.\n' Kconfig
+          echo "=== ✅ SSG 步骤全部完成 ==="
+          echo "SSG_OK=true" >> $GITHUB_ENV
 
-          echo "SSG IO 调度器源码添加完成（路径：msm-kernel/block）"
-      # ============================================================
-
-      # ============================================================
-      # 配置信息（包含所有优化 + 精准关闭调试）
-      # ============================================================
+      # ================================================================
+      # 配置信息
+      # ================================================================
       - name: Add Configuration Settings
         run: |
           cd kernel_workspace/kernel_platform
@@ -294,30 +319,26 @@ jobs:
           # Remove check_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-          # ============================================================
-          # KVM 虚拟化支持
-          # ============================================================
+          # KVM
           echo "CONFIG_KVM=y" >> "$CONFIG_FILE"
           echo "CONFIG_HAVE_KVM=y" >> "$CONFIG_FILE"
           echo "CONFIG_KVM_ARM_HOST=y" >> "$CONFIG_FILE"
 
-          # ============================================================
-          # SSG IO 调度器（设为默认）
-          # ============================================================
-          echo "CONFIG_MQ_IOSCHED_SSG=y" >> "$CONFIG_FILE"
-          echo "CONFIG_MQ_IOSCHED_SSG_CGROUP=y" >> "$CONFIG_FILE"
-          echo "CONFIG_MQ_SSG_DEFAULT=y" >> "$CONFIG_FILE"
+          # SSG IO 调度器配置（如果 SSG 步骤成功则启用，否则跳过）
+          if [ "${{ env.SSG_OK }}" = "true" ]; then
+            echo "CONFIG_MQ_IOSCHED_SSG=y" >> "$CONFIG_FILE"
+            echo "CONFIG_MQ_IOSCHED_SSG_CGROUP=y" >> "$CONFIG_FILE"
+            echo "CONFIG_MQ_SSG_DEFAULT=y" >> "$CONFIG_FILE"
+          else
+            echo "⚠️ SSG 未成功，跳过 SSG 配置"
+          fi
 
-          # ============================================================
-          # 网络优化（BBR + CAKE + TFO）
-          # ============================================================
+          # 网络优化
           echo "CONFIG_TCP_CONG_BBR=y" >> "$CONFIG_FILE"
           echo "CONFIG_NET_SCH_CAKE=y" >> "$CONFIG_FILE"
           echo "CONFIG_TCP_FASTOPEN=y" >> "$CONFIG_FILE"
 
-          # ============================================================
-          # 待机功耗优化
-          # ============================================================
+          # 待机功耗
           echo "CONFIG_CPU_IDLE=y" >> "$CONFIG_FILE"
           echo "CONFIG_CPU_IDLE_GOV_LADDER=y" >> "$CONFIG_FILE"
           echo "CONFIG_CPU_IDLE_GOV_MENU=y" >> "$CONFIG_FILE"
@@ -327,10 +348,7 @@ jobs:
           echo "CONFIG_SCHED_MC=y" >> "$CONFIG_FILE"
           echo "CONFIG_SCHED_SMT=y" >> "$CONFIG_FILE"
 
-          # ============================================================
-          # 关闭纯调试选项（保留 DEBUG_FS、KALLSYMS、KPROBES、FTRACE 等）
-          # 这些保留项是搞机工具（Kernel Adiutor、Scene、KPM）依赖的
-          # ============================================================
+          # 关闭纯调试（保留功能性接口）
           echo "# CONFIG_DEBUG_KERNEL is not set" >> "$CONFIG_FILE"
           echo "# CONFIG_DEBUG_MISC is not set" >> "$CONFIG_FILE"
           echo "# CONFIG_DEBUG_VM is not set" >> "$CONFIG_FILE"
@@ -357,21 +375,7 @@ jobs:
           echo "# CONFIG_DEBUG_PLIST is not set" >> "$CONFIG_FILE"
           echo "# CONFIG_DEBUG_RWSEMS is not set" >> "$CONFIG_FILE"
 
-          # ============================================================
-          # 保留的功能性调试接口（搞机必备，不关闭）
-          # ============================================================
-          # CONFIG_DEBUG_FS          - 保留（Kernel Adiutor / Scene 依赖）
-          # CONFIG_KALLSYMS          - 保留（WireGuard / 第三方模块依赖）
-          # CONFIG_KPROBES           - 保留（KPM / 动态探针依赖）
-          # CONFIG_UPROBES           - 保留（用户态探针）
-          # CONFIG_FTRACE            - 保留（性能追踪工具依赖）
-          # CONFIG_TRACING           - 保留（systrace / perf 依赖）
-          # CONFIG_SCHEDSTATS        - 保留（调度统计信息）
-          # CONFIG_DEBUG_INFO        - 保留（调试符号，GDB 依赖）
-
-          # ============================================================
-          # LZ4KD（ZRAM 优化，可选）
-          # ============================================================
+          # LZ4KD（可选）
           if [ "${{ github.event.inputs.ZRAM }}" = "true" ]; then
           CONFIG_FILE=./common/arch/arm64/configs/gki_defconfig
 
@@ -448,7 +452,7 @@ jobs:
           target1="./AnyKernel3/"
           target2="./kernel_workspace/kernel"
 
-          # 查找 Image 文件
+          # 查找 Image
           if find "$dir1" -name "Image" | grep -q "Image"; then
             image_path="$dir1"Image
           elif find "$dir2" -name "Image" | grep -q "Image"; then
@@ -463,7 +467,6 @@ jobs:
             image_path=$(find "./kernel_workspace/kernel_platform/common/out/" -name "Image" | head -n 1)
           fi
 
-          # 拷贝 Image
           if [ -n "$image_path" ] && [ -f "$image_path" ]; then
             mkdir -p "$dir1"
             if [ "$(realpath "$image_path")" != "$(realpath "$dir1"Image)" ]; then
@@ -477,7 +480,7 @@ jobs:
             exit 1
           fi
 
-          # 可选复制其它新文件（如果存在）
+          # 可选复制其它新文件
           if [ "${{ github.event.inputs.CPU }}" = "sm8750" ] || [ "${{ github.event.inputs.CPU }}" = "sm8850" ]; then
           for file in dtbo.img system_dlkm.erofs.img vendor_dlkm.img vendor_boot.img; do
             if [ -f "$dir1$file" ]; then
@@ -523,7 +526,6 @@ jobs:
           curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -o ksu_module_susfs.zip "$ARTIFACT_URL"
           cp ksu_module_susfs.zip ./AnyKernel3/
 
-      # 下载 SUSFS 模块（Release）
       - name: Download Latest SUSFS Module from Release
         if: ${{ github.event.inputs.SUSFS_CI == 'false' }}
         run: |
