@@ -1,4 +1,4 @@
-name: Build OnePlus_SukiSU Ultra All
+name: Build OnePlus_SukiSU Ultra Final (with SSG + Optimized Debug)
 on:
   workflow_dispatch:
     inputs:
@@ -74,7 +74,7 @@ on:
        type: choice
        description: "内核版本"
        required: true
-       default: "5.15"
+       default: "5.10"
        options:
          - "5.10"
          - "5.15"
@@ -234,7 +234,35 @@ jobs:
           fi
 
       # ============================================================
-      # 配置信息（包含所有优化配置）
+      # 新增：拉取 SSG IO 调度器源码（路径修正为 msm-kernel/block）
+      # ============================================================
+      - name: Add SSG IO Scheduler
+        run: |
+          cd kernel_workspace/kernel_platform
+
+          # 克隆包含 SSG 的内核仓库（只拉 block 目录）
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/ramabondanp/android_kernel_common-5.10.git ../ssg_src
+          cd ../ssg_src
+          git sparse-checkout set block
+
+          # 复制 SSG 相关源文件到 msm-kernel/block（正确路径）
+          cp block/ssg-iosched.c ../kernel_workspace/kernel_platform/msm-kernel/block/
+          cp block/ssg-cgroup.c ../kernel_workspace/kernel_platform/msm-kernel/block/ 2>/dev/null || true
+
+          cd ../kernel_workspace/kernel_platform/msm-kernel/block
+
+          # 修改 block/Makefile：在 bfq.o 后面追加 ssg 编译规则
+          sed -i '/obj-$(CONFIG_IOSCHED_BFQ) += bfq.o/a ssg-$(CONFIG_MQ_IOSCHED_SSG) := ssg-iosched.o\nssg-$(CONFIG_MQ_IOSCHED_SSG_CGROUP) += ssg-cgroup.o\nobj-$(CONFIG_MQ_IOSCHED_SSG) += ssg.o' Makefile
+
+          # 修改 block/Kconfig：在 BFQ_CGROUP_DEBUG 后面追加 SSG 配置项
+          sed -i '/config BFQ_CGROUP_DEBUG/a config MQ_IOSCHED_SSG\n\ttristate "SamSung Generic I/O scheduler"\n\tdefault n\n\thelp\n\t  SamSung Generic IO scheduler.\n\nconfig MQ_IOSCHED_SSG_CGROUP\n\ttristate "Control Group for SamSung Generic I/O scheduler"\n\tdefault n\n\tdepends on BLK_CGROUP\n\tdepends on MQ_IOSCHED_SSG\n\thelp\n\t  Control Group for SamSung Generic IO scheduler.\n' Kconfig
+
+          echo "SSG IO 调度器源码添加完成（路径：msm-kernel/block）"
+      # ============================================================
+
+      # ============================================================
+      # 配置信息（包含所有优化 + 精准关闭调试）
       # ============================================================
       - name: Add Configuration Settings
         run: |
@@ -267,11 +295,18 @@ jobs:
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
           # ============================================================
-          # KVM 虚拟化
+          # KVM 虚拟化支持
           # ============================================================
           echo "CONFIG_KVM=y" >> "$CONFIG_FILE"
           echo "CONFIG_HAVE_KVM=y" >> "$CONFIG_FILE"
           echo "CONFIG_KVM_ARM_HOST=y" >> "$CONFIG_FILE"
+
+          # ============================================================
+          # SSG IO 调度器（设为默认）
+          # ============================================================
+          echo "CONFIG_MQ_IOSCHED_SSG=y" >> "$CONFIG_FILE"
+          echo "CONFIG_MQ_IOSCHED_SSG_CGROUP=y" >> "$CONFIG_FILE"
+          echo "CONFIG_MQ_SSG_DEFAULT=y" >> "$CONFIG_FILE"
 
           # ============================================================
           # 网络优化（BBR + CAKE + TFO）
@@ -281,33 +316,61 @@ jobs:
           echo "CONFIG_TCP_FASTOPEN=y" >> "$CONFIG_FILE"
 
           # ============================================================
-          # 待机功耗优化（内核配置层面）
+          # 待机功耗优化
           # ============================================================
-          # CPU 空闲管理：启用更深的 idle 状态
           echo "CONFIG_CPU_IDLE=y" >> "$CONFIG_FILE"
           echo "CONFIG_CPU_IDLE_GOV_LADDER=y" >> "$CONFIG_FILE"
           echo "CONFIG_CPU_IDLE_GOV_MENU=y" >> "$CONFIG_FILE"
-          # USB 自动挂起
           echo "CONFIG_USB_SUSPEND=y" >> "$CONFIG_FILE"
-          # 运行时电源管理
           echo "CONFIG_PM_RUNTIME=y" >> "$CONFIG_FILE"
           echo "CONFIG_PM_SLEEP=y" >> "$CONFIG_FILE"
-          # 调度器调优（省电倾向）
           echo "CONFIG_SCHED_MC=y" >> "$CONFIG_FILE"
           echo "CONFIG_SCHED_SMT=y" >> "$CONFIG_FILE"
 
           # ============================================================
-          # 关闭调试选项（减少性能开销）
+          # 关闭纯调试选项（保留 DEBUG_FS、KALLSYMS、KPROBES、FTRACE 等）
+          # 这些保留项是搞机工具（Kernel Adiutor、Scene、KPM）依赖的
           # ============================================================
           echo "# CONFIG_DEBUG_KERNEL is not set" >> "$CONFIG_FILE"
-          echo "# CONFIG_DEBUG_INFO is not set" >> "$CONFIG_FILE"
           echo "# CONFIG_DEBUG_MISC is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_VM is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_KMEMLEAK is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_SLAB is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_SPINLOCK is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_MUTEXES is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_LOCK_ALLOC is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_PROVE_LOCKING is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_LOCK_STAT is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_ATOMIC_SLEEP is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_LIST is not set" >> "$CONFIG_FILE"
           echo "# CONFIG_DEBUG_NET is not set" >> "$CONFIG_FILE"
           echo "# CONFIG_NET_DROP_MONITOR is not set" >> "$CONFIG_FILE"
           echo "# CONFIG_SCHED_DEBUG is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_BUGVERBOSE is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_OBJECTS is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_PAGEALLOC is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_VIRTUAL is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_MEMORY_INIT is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_CREDENTIALS is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_NOTIFIERS is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_SG is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_PLIST is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_RWSEMS is not set" >> "$CONFIG_FILE"
 
           # ============================================================
-          # LZ4KD（ZRAM 优化）
+          # 保留的功能性调试接口（搞机必备，不关闭）
+          # ============================================================
+          # CONFIG_DEBUG_FS          - 保留（Kernel Adiutor / Scene 依赖）
+          # CONFIG_KALLSYMS          - 保留（WireGuard / 第三方模块依赖）
+          # CONFIG_KPROBES           - 保留（KPM / 动态探针依赖）
+          # CONFIG_UPROBES           - 保留（用户态探针）
+          # CONFIG_FTRACE            - 保留（性能追踪工具依赖）
+          # CONFIG_TRACING           - 保留（systrace / perf 依赖）
+          # CONFIG_SCHEDSTATS        - 保留（调度统计信息）
+          # CONFIG_DEBUG_INFO        - 保留（调试符号，GDB 依赖）
+
+          # ============================================================
+          # LZ4KD（ZRAM 优化，可选）
           # ============================================================
           if [ "${{ github.event.inputs.ZRAM }}" = "true" ]; then
           CONFIG_FILE=./common/arch/arm64/configs/gki_defconfig
@@ -344,7 +407,7 @@ jobs:
                 echo "CONFIG_ZSMALLOC=y" >> "msm-kernel/arch/arm64/configs/${{ github.event.inputs.CPUD }}-GKI.config"
                 echo "CONFIG_ZRAM=y" >> "msm-kernel/arch/arm64/configs/${{ github.event.inputs.CPUD }}-GKI.config"
               fi
-              
+
               echo "CONFIG_MODULE_SIG_FORCE=n" >> "$CONFIG_FILE"
             elif [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.10" ] || [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.15" ]; then
               rm "common/android/gki_aarch64_modules"
@@ -365,7 +428,7 @@ jobs:
         run: |
           cd kernel_workspace
           ./kernel_platform/build_with_bazel.py -t ${{ github.event.inputs.CPUD }} ${{ github.event.inputs.BUILD_METHOD }}
-          
+
       - name: Fallback build kernel
         if: ${{ github.event.inputs.CPU != 'sm8650' && github.event.inputs.CPU != 'sm7675' }}
         run: |
