@@ -79,24 +79,25 @@ jobs:
       - name: Generate directory tree
         run: |
           cd kernel_workspace/kernel_platform
-          tree -L 3 -d > /tmp/dirtree.txt
-          echo "=== Kernel Platform Directory Structure ===" >> /tmp/dirtree.txt
-          echo "" >> /tmp/dirtree.txt
-          tree -L 3 -d >> /tmp/dirtree.txt
-          echo "" >> /tmp/dirtree.txt
-          echo "=== block directory location ===" >> /tmp/dirtree.txt
-          find . -type d -name block >> /tmp/dirtree.txt
-          echo "" >> /tmp/dirtree.txt
-          echo "=== drivers/cpufreq location ===" >> /tmp/dirtree.txt
-          find . -type d -name cpufreq >> /tmp/dirtree.txt
-          echo "" >> /tmp/dirtree.txt
-          echo "=== drivers/cpu_input_boost location ===" >> /tmp/dirtree.txt
-          find . -type d -name cpu_input_boost >> /tmp/dirtree.txt
+          {
+            echo "=== Kernel Platform Directory Structure (depth 3) ==="
+            tree -L 3 -d
+            echo ""
+            echo "=== Location of 'block' directory ==="
+            find . -type d -name block
+            echo ""
+            echo "=== Location of 'cpufreq' directory ==="
+            find . -type d -name cpufreq
+            echo ""
+            echo "=== Location of 'cpu_input_boost' directory ==="
+            find . -type d -name cpu_input_boost
+            echo ""
+            echo "=== List of top-level directories ==="
+            ls -la
+          } > /tmp/dirtree.txt
 
-      - name: Upload source structure artifact
+      - name: Upload directory tree info
         uses: actions/upload-artifact@v4
         with:
-          name: kernel_source_structure
-          path: |
-            kernel_workspace/kernel_platform
-            /tmp/dirtree.txt
+          name: kernel_directory_tree
+          path: /tmp/dirtree.txt
