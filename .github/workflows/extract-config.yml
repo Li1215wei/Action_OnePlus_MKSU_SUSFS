@@ -1,13 +1,51 @@
-- name: 从 Release 下载 Image 文件
-  run: |
-    # 先用 wget 试一次，并显示详细输出
-    wget --verbose https://github.com/Li1215wei/Action_OnePlus_MKSU_SUSFS/releases/download/v0.1-image/Image -O Image
-    # 检查文件是否下载成功
-    if [ ! -f ./Image ]; then
-      echo "下载失败，尝试用 curl 再次下载"
-      curl -L -H "Accept: application/octet-stream" \
-        https://github.com/Li1215wei/Action_OnePlus_MKSU_SUSFS/releases/download/v0.1-image/Image \
-        -o Image
-    fi
-    # 列出当前目录文件，确认文件已存在
-    ls -la
+name: Extract Kernel Config from Nothing Image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract-config:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 从 Release 下载 Image 文件
+        run: |
+          echo "开始下载 Image 文件..."
+          wget --verbose https://github.com/Li1215wei/Action_OnePlus_MKSU_SUSFS/releases/download/v0.1-image/Image -O Image || curl -L https://github.com/Li1215wei/Action_OnePlus_MKSU_SUSFS/releases/download/v0.1-image/Image -o Image
+          echo "下载完成，当前目录文件列表："
+          ls -la
+
+      - name: 检查 Image 文件是否存在
+        run: |
+          if [ ! -f ./Image ]; then
+            echo "错误: 未找到 Image 文件，下载可能失败"
+            exit 1
+          fi
+          echo "Image 文件大小："
+          du -sh ./Image
+
+      - name: 安装 extract-ikconfig
+        run: |
+          sudo apt update
+          sudo apt install -y linux-base
+
+      - name: 提取内核配置
+        run: |
+          extract-ikconfig ./Image > kernel_config.txt
+          if [ ! -s kernel_config.txt ]; then
+            echo "警告: 提取的配置文件为空，可能 Image 不包含 .config"
+          fi
+
+      - name: 过滤关键优化配置
+        run: |
+          echo "===== 关键优化配置 =====" > summary.txt
+          grep -E "CONFIG_CPU_INPUT_BOOST|CONFIG_TEO_CPUIDLE|CONFIG_PM|CONFIG_SUSPEND|CONFIG_CPU_IDLE|CONFIG_SCHED" kernel_config.txt >> summary.txt || echo "未找到相关配置项" >> summary.txt
+          cat summary.txt
+
+      - name: 上传提取的配置文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-config-extracted
+          path: |
+            kernel_config.txt
+            summary.txt
