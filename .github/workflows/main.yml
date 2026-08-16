@@ -1,60 +1,51 @@
-name: Analyze Wild Kernel Image
-on:
-  workflow_dispatch:
-    inputs:
-      IMAGE_URL:
-        description: '大佬Image文件的直链下载地址'
-        required: true
-        default: 'https://github.com/yourname/yourrepo/releases/download/tag/Image'
+- name: Find and export uclamp source files
+  run: |
+    cd kernel_workspace/kernel_platform
 
-jobs:
-  analyze:
-    runs-on: ubuntu-latest
+    # 创建输出目录
+    mkdir -p /tmp/uclamp_src
 
-    steps:
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 8192
-          temp-reserve-mb: 2048
-          swap-size-mb: 8192
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
+    echo "=== Searching for uclamp related source files in msm-kernel ==="
+    # 在 msm-kernel 下搜索所有包含 "uclamp" 的 .c 和 .h 文件
+    find ./msm-kernel -type f \( -name "*.c" -o -name "*.h" \) -exec grep -l "uclamp" {} \; 2>/dev/null > /tmp/uclamp_files_list.txt
 
-      - name: Install tools
-        run: |
-          sudo apt update
-          sudo apt install -y binutils curl
+    # 如果 msm-kernel 没找到，在 common 下搜索
+    if [ ! -s /tmp/uclamp_files_list.txt ]; then
+      echo "No uclamp files found in msm-kernel, searching in common..."
+      find ./common -type f \( -name "*.c" -o -name "*.h" \) -exec grep -l "uclamp" {} \; 2>/dev/null > /tmp/uclamp_files_list.txt
+    fi
 
-      - name: Download wild Image
-        run: |
-          curl -L "${{ github.event.inputs.IMAGE_URL }}" -o /tmp/wild_Image
-          file /tmp/wild_Image
-          ls -lh /tmp/wild_Image
+    # 显示找到的文件列表
+    echo "=== Files found ==="
+    cat /tmp/uclamp_files_list.txt
+    echo ""
 
-      - name: Extract uclamp symbols
-        run: |
-          {
-            echo "=== uclamp symbols from nm ==="
-            nm /tmp/wild_Image 2>/dev/null | grep -i uclamp || echo "No uclamp symbols found by nm"
-            echo ""
-            echo "=== uclamp strings ==="
-            strings /tmp/wild_Image | grep -i uclamp || echo "No uclamp strings"
-            echo ""
-            echo "=== sched related strings (head 50) ==="
-            strings /tmp/wild_Image | grep -i "sched" | head -50
-            echo ""
-            echo "=== SSG related strings ==="
-            strings /tmp/wild_Image | grep -i "ssg" || echo "No SSG strings"
-            echo ""
-            echo "=== bbr related strings ==="
-            strings /tmp/wild_Image | grep -i "bbr" || echo "No bbr strings"
-          } > /tmp/uclamp_report.txt
+    # 复制找到的文件到输出目录
+    while IFS= read -r file; do
+      if [ -f "$file" ]; then
+        target_dir="/tmp/uclamp_src/$(dirname "$file")"
+        mkdir -p "$target_dir"
+        cp "$file" "$target_dir/"
+        echo "Copied: $file"
+      fi
+    done < /tmp/uclamp_files_list.txt
 
-      - name: Upload analysis result
-        uses: actions/upload-artifact@v4
-        with:
-          name: wild_kernel_analysis
-          path: /tmp/uclamp_report.txt
+    # 如果还是没有找到任何文件，输出诊断信息
+    if [ ! -s /tmp/uclamp_files_list.txt ]; then
+      echo "ERROR: No uclamp source files found in msm-kernel or common!" > /tmp/uclamp_src/NO_UCLAMP_FILES.txt
+      echo "Searching for sched directory structure..." >> /tmp/uclamp_src/NO_UCLAMP_FILES.txt
+      find ./msm-kernel -type d -name sched >> /tmp/uclamp_src/NO_UCLAMP_FILES.txt 2>/dev/null || echo "No sched dir found" >> /tmp/uclamp_src/NO_UCLAMP_FILES.txt
+    fi
+
+    # 生成汇总报告
+    {
+      echo "=== UCLAMP SOURCE FILES SUMMARY ==="
+      echo "Total files found: $(wc -l < /tmp/uclamp_files_list.txt 2>/dev/null || echo 0)"
+      echo ""
+      echo "=== File list ==="
+      cat /tmp/uclamp_files_list.txt 2>/dev/null || echo "No files found"
+      echo ""
+      echo "=== Directory structure of extracted files ==="
+      cd /tmp/uclamp_src
+      find . -type f | sort 2>/dev/null || echo "No files extracted"
+    } > /tmp/uclamp_src/SUMMARY.txt
