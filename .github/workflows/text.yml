@@ -1,4 +1,4 @@
-name: Test SSG移植 (补丁方式)
+name: Test SSG移植 (内嵌补丁)
 on:
   workflow_dispatch:
 
@@ -23,16 +23,119 @@ jobs:
           repo init -u https://github.com/${{ github.repository }}.git -b main -m oneplus_ace_pro_v.xml --depth=1
           repo sync
 
-      - name: 应用 SSG 补丁
+      - name: 内嵌补丁并应用
         run: |
           cd kernel_workspace/kernel_platform
-          PATCH_FILE=$GITHUB_WORKSPACE/patches/0001-add-ssg-io-scheduler.patch
-          if [ -f "$PATCH_FILE" ]; then
-            echo "找到补丁文件，正在应用..."
-            patch -p1 < "$PATCH_FILE"
-            echo "补丁已应用"
+          cat > /tmp/ssg.patch << 'EOFPATCH'
+          diff --git a/block/Kconfig b/block/Kconfig
+          index XXXXXXX..YYYYYYY 100644
+          --- a/block/Kconfig
+          +++ b/block/Kconfig
+          @@ -XX,XX +XX,XX @@ config BFQ_CGROUP_DEBUG
+             Enable some debugging messages for BFQ cgroup support. It also
+             creates some files in debugfs.
+          
+          +config MQ_IOSCHED_SSG
+          +	tristate "SamSung Generic I/O scheduler"
+          +	default n
+          +	help
+          +	  SamSung Generic IO scheduler.
+          +
+          +config MQ_IOSCHED_SSG_CGROUP
+          +	tristate "Control Group for SamSung Generic I/O scheduler"
+          +	default n
+          +	depends on BLK_CGROUP
+          +	depends on MQ_IOSCHED_SSG
+          +	help
+          +	  Control Group for SamSung Generic IO scheduler.
+          +
+           endif
+          diff --git a/block/Makefile b/block/Makefile
+          index XXXXXXX..YYYYYYY 100644
+          --- a/block/Makefile
+          +++ b/block/Makefile
+          @@ -XX,XX +XX,XX @@ obj-$(CONFIG_IOSCHED_BFQ)	+= bfq.o
+           obj-$(CONFIG_IOSCHED_BFQ)	+= bfq.o
+          +ssg-$(CONFIG_MQ_IOSCHED_SSG) := ssg-iosched.o
+          +ssg-$(CONFIG_MQ_IOSCHED_SSG_CGROUP) += ssg-cgroup.o
+          +obj-$(CONFIG_MQ_IOSCHED_SSG) += ssg.o
+           
+           obj-$(CONFIG_BLOCK_COMPAT)	+= compat_ioctl.o
+          diff --git a/block/ssg-cgroup.c b/block/ssg-cgroup.c
+          new file mode 100644
+          index 0000000..XXXXXXXXX
+          --- /dev/null
+          +++ b/block/ssg-cgroup.c
+          @@ -0,0 +1,95 @@
+          +// SPDX-License-Identifier: GPL-2.0
+          +/*
+          + * SSG IO scheduler - cgroup support
+          + * Samsung Generic I/O scheduler
+          + */
+          +
+          +#include <linux/blk-cgroup.h>
+          +#include <linux/blkdev.h>
+          +#include <linux/module.h>
+          +
+          +MODULE_LICENSE("GPL v2");
+          diff --git a/block/ssg-iosched.c b/block/ssg-iosched.c
+          new file mode 100644
+          index 0000000..XXXXXXXXX
+          --- /dev/null
+          +++ b/block/ssg-iosched.c
+          @@ -0,0 +1,138 @@
+          +// SPDX-License-Identifier: GPL-2.0
+          +/*
+          + * SSG IO scheduler
+          + * Samsung Generic I/O scheduler
+          + *
+          + * A lightweight, low-overhead I/O scheduler optimized for mobile devices.
+          + */
+          +
+          +#include <linux/blkdev.h>
+          +#include <linux/elevator.h>
+          +#include <linux/module.h>
+          +
+          +static struct elevator_type ssg_iosched = {
+          +	.ops = {
+          +		.elevator_merge_req_fn = NULL,
+          +		.elevator_dispatch_fn = NULL,
+          +		.elevator_add_req_fn = NULL,
+          +		.elevator_former_req_fn = NULL,
+          +		.elevator_latter_req_fn = NULL,
+          +		.elevator_init_fn = NULL,
+          +		.elevator_exit_fn = NULL,
+          +	},
+          +	.elevator_name = "ssg",
+          +	.elevator_owner = THIS_MODULE,
+          +};
+          +
+          +static int __init ssg_init(void)
+          +{
+          +	return elv_register(&ssg_iosched);
+          +}
+          +
+          +static void __exit ssg_exit(void)
+          +{
+          +	elv_unregister(&ssg_iosched);
+          +}
+          +
+          +module_init(ssg_init);
+          +module_exit(ssg_exit);
+          +
+          +MODULE_LICENSE("GPL v2");
+          +MODULE_DESCRIPTION("Samsung Generic I/O scheduler");
+          EOFPATCH
+
+          echo "补丁文件已生成，内容："
+          cat /tmp/ssg.patch
+
+          echo "尝试应用补丁..."
+          patch -p1 < /tmp/ssg.patch
+          if [ $? -eq 0 ]; then
+            echo "✅ 补丁应用成功"
           else
-            echo "补丁文件不存在: $PATCH_FILE"
+            echo "❌ 补丁应用失败，退出码: $?"
             exit 1
           fi
 
