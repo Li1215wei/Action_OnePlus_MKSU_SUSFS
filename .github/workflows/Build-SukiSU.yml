@@ -234,59 +234,8 @@ jobs:
           fi
 
       # ============================================================
-      # 新增：从 Nothing SM8475 仓库自动拉取优化补丁（含网络优化）
+      # 配置信息（包含所有优化配置）
       # ============================================================
-      - name: Pull optimization patches from Nothing SM8475
-        run: |
-          cd kernel_workspace/kernel_platform/common
-
-          # V4.1-Pong 安全可搬的 commit hash + BBR v3 网络优化
-          COMMITS="
-          c080b7a
-          2541510
-          894ab5a
-          2f5cf60
-          416bef7
-          "
-
-          for commit in $COMMITS; do
-            echo "正在尝试应用: $commit"
-            curl -L "https://github.com/HELLBOY017/kernel_nothing_sm8475/commit/$commit.patch" -o /tmp/$commit.patch
-            git am --whitespace=fix /tmp/$commit.patch || echo "补丁 $commit 冲突，已跳过"
-          done
-
-          echo "Nothing SM8475 优化补丁处理完成"
-      # ============================================================
-
-      # ============================================================
-      # 新增：拉取 SSG IO 调度器源码
-      # ============================================================
-      - name: Add SSG IO Scheduler
-        run: |
-          cd kernel_workspace/kernel_platform/common
-
-          # 克隆包含 SSG 的内核仓库（只拉 block 目录）
-          git clone --depth 1 --filter=blob:none --sparse \
-            https://github.com/ramabondanp/android_kernel_common-5.10.git ../ssg_src
-          cd ../ssg_src
-          git sparse-checkout set block
-
-          # 复制 SSG 相关源文件到你的内核
-          cp block/ssg-iosched.c ../kernel_workspace/kernel_platform/common/block/
-          cp block/ssg-cgroup.c ../kernel_workspace/kernel_platform/common/block/ 2>/dev/null || true
-
-          cd ../kernel_workspace/kernel_platform/common
-
-          # 修改 block/Makefile：在 bfq.o 后面追加 ssg 编译规则
-          sed -i '/obj-$(CONFIG_IOSCHED_BFQ) += bfq.o/a ssg-$(CONFIG_MQ_IOSCHED_SSG) := ssg-iosched.o\nssg-$(CONFIG_MQ_IOSCHED_SSG_CGROUP) += ssg-cgroup.o\nobj-$(CONFIG_MQ_IOSCHED_SSG) += ssg.o' block/Makefile
-
-          # 修改 block/Kconfig：在 BFQ_CGROUP_DEBUG 后面追加 SSG 配置项
-          sed -i '/config BFQ_CGROUP_DEBUG/a config MQ_IOSCHED_SSG\n\ttristate "SamSung Generic I/O scheduler"\n\tdefault n\n\thelp\n\t  SamSung Generic IO scheduler.\n\nconfig MQ_IOSCHED_SSG_CGROUP\n\ttristate "Control Group for SamSung Generic I/O scheduler"\n\tdefault n\n\tdepends on BLK_CGROUP\n\tdepends on MQ_IOSCHED_SSG\n\thelp\n\t  Control Group for SamSung Generic IO scheduler.\n' block/Kconfig
-
-          echo "SSG IO 调度器源码添加完成"
-      # ============================================================
-
-      # 配置信息
       - name: Add Configuration Settings
         run: |
           cd kernel_workspace/kernel_platform
@@ -318,32 +267,48 @@ jobs:
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
           # ============================================================
-          # 新增：KVM 虚拟化支持
+          # KVM 虚拟化
           # ============================================================
           echo "CONFIG_KVM=y" >> "$CONFIG_FILE"
           echo "CONFIG_HAVE_KVM=y" >> "$CONFIG_FILE"
           echo "CONFIG_KVM_ARM_HOST=y" >> "$CONFIG_FILE"
-          # ============================================================
 
           # ============================================================
-          # 新增：SSG IO 调度器配置
-          # ============================================================
-          echo "CONFIG_MQ_IOSCHED_SSG=y" >> "$CONFIG_FILE"
-          echo "CONFIG_MQ_IOSCHED_SSG_CGROUP=y" >> "$CONFIG_FILE"
-          echo "CONFIG_MQ_SSG_DEFAULT=y" >> "$CONFIG_FILE"
-          # ============================================================
-
-          # ============================================================
-          # 新增：网络优化配置（TCP BBR v3 + CAKE + TFO + 关闭调试）
+          # 网络优化（BBR + CAKE + TFO）
           # ============================================================
           echo "CONFIG_TCP_CONG_BBR=y" >> "$CONFIG_FILE"
           echo "CONFIG_NET_SCH_CAKE=y" >> "$CONFIG_FILE"
           echo "CONFIG_TCP_FASTOPEN=y" >> "$CONFIG_FILE"
+
+          # ============================================================
+          # 待机功耗优化（内核配置层面）
+          # ============================================================
+          # CPU 空闲管理：启用更深的 idle 状态
+          echo "CONFIG_CPU_IDLE=y" >> "$CONFIG_FILE"
+          echo "CONFIG_CPU_IDLE_GOV_LADDER=y" >> "$CONFIG_FILE"
+          echo "CONFIG_CPU_IDLE_GOV_MENU=y" >> "$CONFIG_FILE"
+          # USB 自动挂起
+          echo "CONFIG_USB_SUSPEND=y" >> "$CONFIG_FILE"
+          # 运行时电源管理
+          echo "CONFIG_PM_RUNTIME=y" >> "$CONFIG_FILE"
+          echo "CONFIG_PM_SLEEP=y" >> "$CONFIG_FILE"
+          # 调度器调优（省电倾向）
+          echo "CONFIG_SCHED_MC=y" >> "$CONFIG_FILE"
+          echo "CONFIG_SCHED_SMT=y" >> "$CONFIG_FILE"
+
+          # ============================================================
+          # 关闭调试选项（减少性能开销）
+          # ============================================================
+          echo "# CONFIG_DEBUG_KERNEL is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_INFO is not set" >> "$CONFIG_FILE"
+          echo "# CONFIG_DEBUG_MISC is not set" >> "$CONFIG_FILE"
           echo "# CONFIG_DEBUG_NET is not set" >> "$CONFIG_FILE"
           echo "# CONFIG_NET_DROP_MONITOR is not set" >> "$CONFIG_FILE"
-          # ============================================================
+          echo "# CONFIG_SCHED_DEBUG is not set" >> "$CONFIG_FILE"
 
-          # LZ4KD配置
+          # ============================================================
+          # LZ4KD（ZRAM 优化）
+          # ============================================================
           if [ "${{ github.event.inputs.ZRAM }}" = "true" ]; then
           CONFIG_FILE=./common/arch/arm64/configs/gki_defconfig
 
@@ -454,7 +419,6 @@ jobs:
           for file in dtbo.img system_dlkm.erofs.img vendor_dlkm.img vendor_boot.img; do
             if [ -f "$dir1$file" ]; then
               target_name="$file"
-              # 特殊处理 system_dlkm.erofs.img 的目标名
               if [ "$file" = "system_dlkm.erofs.img" ]; then
                 target_name="system_dlkm.img"
               fi
@@ -512,8 +476,8 @@ jobs:
         id: feil_clean
         run: |
           clean_feil="${{ github.event.inputs.FEIL }}"
-          clean_feil="${clean_feil%_v}"  # 去掉结尾的 _v（如果有）
-          clean_feil="${clean_feil%_u}"  # 去掉结尾的 _u（如果有）
+          clean_feil="${clean_feil%_v}"
+          clean_feil="${clean_feil%_u}"
           echo "value=$clean_feil" >> $GITHUB_OUTPUT
 
       - name: Upload AnyKernel3
