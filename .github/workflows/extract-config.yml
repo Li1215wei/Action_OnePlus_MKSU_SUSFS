@@ -1,0 +1,44 @@
+name: Extract Kernel Config from Nothing Image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract-config:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 从 Release 下载 Image 文件
+        run: |
+          # 通过 GitHub API 获取 Release 信息，并解析出 Image 文件的下载地址
+          curl -L \
+            -H "Accept: application/octet-stream" \
+            https://github.com/Li1215wei/Action_OnePlus_MKSU_SUSFS/releases/download/v0.1-image/Image \
+            -o Image
+
+      - name: 安装 extract-ikconfig
+        run: |
+          sudo apt update
+          sudo apt install -y linux-base
+
+      - name: 提取内核配置
+        run: |
+          if [ ! -f ./Image ]; then
+            echo "错误: 未找到 Image 文件"
+            exit 1
+          fi
+          extract-ikconfig ./Image > kernel_config.txt
+
+      - name: 过滤关键优化配置
+        run: |
+          echo "===== 关键优化配置 =====" > summary.txt
+          grep -E "CONFIG_CPU_INPUT_BOOST|CONFIG_TEO_CPUIDLE|CONFIG_PM|CONFIG_SUSPEND|CONFIG_CPU_IDLE|CONFIG_SCHED" kernel_config.txt >> summary.txt || echo "未找到相关配置项" >> summary.txt
+          cat summary.txt
+
+      - name: 上传提取的配置文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-config-extracted
+          path: |
+            kernel_config.txt
+            summary.txt
